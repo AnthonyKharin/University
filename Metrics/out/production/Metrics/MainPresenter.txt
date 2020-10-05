@@ -1,0 +1,156 @@
+import com.annimon.stream.Stream;
+
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.List;
+
+import ru.anthony_kharin.dailyplanner.R;
+import ru.anthony_kharin.dailyplanner.contracts.MainContract;
+import ru.anthony_kharin.dailyplanner.contracts.ModelContract;
+import ru.anthony_kharin.dailyplanner.entity.Hour;
+import ru.anthony_kharin.dailyplanner.entity.Task;
+import ru.anthony_kharin.dailyplanner.model.SmartModel;
+
+public class MainPresenter implements MainContract.Presenter {
+
+    private MainContract.View mainView;
+
+    private SmartModel model;
+
+    private Calendar calendar;
+
+    @Override
+    public void attachView(MainContract.View mainView) {
+        this.mainView = mainView;
+    }
+
+    @Override
+    public void attachModel(SmartModel model) {
+        this.model = model;
+        model.subscribeObserver(this);
+        checkInternet();
+    }
+
+    @Override
+    public void onCalendarClicked(Calendar calendar) {
+        checkInternet();
+        this.calendar = calendar;
+        if (model != null) {
+            if (calendar != null) {
+                //Говорим модели, что нужно загрузить данные
+                model.loadTasks();
+                mainView.showSelectedDay(getSelectedDay(calendar));
+            } else {
+                mainView.showWrongToast();
+            }
+        }
+    }
+
+    @Override
+    public boolean onMenuItemClicked(int id) {
+        checkInternet();
+        if (mainView != null) {
+            if (id == R.id.menu_main_add) {
+                mainView.navigateToCreateTaskActivity();
+                return true;
+            } else {
+                mainView.showWrongToast();
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public void onViewResumed() {
+        checkInternet();
+        if (mainView != null && model != null) {
+            model.loadTasks();
+        }
+    }
+
+
+    private void checkInternet() {
+        if (mainView != null) {
+            //Меняю БД в зависимости от наличия интернета
+            model.changeDB(mainView.getInternetConnection());
+            if (!mainView.getInternetConnection()) {
+                mainView.showNotInternetConnectionToast();
+            }
+        }
+    }
+
+    @Override
+    public void detachView() {
+        mainView = null;
+    }
+
+    @Override
+    public void detachModel() {
+        model.unsubscribeObserver(this);
+        model = null;
+    }
+
+    //Распределение задач по часам
+    private List<Hour> getHoursList(List<Task> tasks) {
+        List<Hour> hours = new ArrayList<>();
+
+        //Сброс часов, минут и т.д.
+        //для получения полуночи выбранного дня
+        calendar.set(Calendar.HOUR_OF_DAY, 0);
+        calendar.set(Calendar.MINUTE, 0);
+        calendar.set(Calendar.SECOND, 0);
+        calendar.set(Calendar.MILLISECOND, 0);
+
+        long midnight = calendar.getTimeInMillis();
+        long oneHourMillis = 3_600_000;
+
+        //Создаем 24 часа для отображения таблицы вконце
+        for (int i = 0; i < 24; i++) {
+            long currentStartTime = midnight + oneHourMillis * i;
+            Hour currentHour = new Hour(currentStartTime);
+            hours.add(currentHour);
+        }
+
+        //Проверка на принадлежность задания определенному часу
+        for (Task task : tasks) {
+            for (Hour currentHour : hours) {
+                if (currentHour.isTimeBelong(task.getDateStart())) {
+                    currentHour.addTask(task);
+                }
+            }
+        }
+        return hours;
+    }
+
+    private List<Calendar> getSelectedDay(Calendar calendar) {
+        //Преобразовываем параметр в список. Так надо для отображения выбранного дня.
+        return Stream.of(calendar).toList();
+    }
+
+    @Override
+    public void onRefresh() {
+        checkInternet();
+        if (mainView != null) {
+            model.loadTasks();
+        }
+    }
+
+    @Override
+    public void updateData(List<Task> tasks, ModelContract source) {
+        if (mainView != null) {
+            if (calendar != null) {
+                //Отбираем задачи, которые принадлежат нужному дню и отображаем расписание
+                mainView.showSchedule(getHoursList(Stream.of(tasks)
+                        .filter(it -> new Timestamp(it.getDateStart()).getDate() == calendar.get(Calendar.DATE))
+                        .toList()));
+            }
+            mainView.stopShowRefreshing();
+        }
+    }
+
+    @Override
+    public void updateData(Task task, ModelContract source) {
+        throw new UnsupportedOperationException("Main Activity doesn't support method \"updateData\" with only one Task!");
+    }
+}
